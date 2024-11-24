@@ -10,9 +10,9 @@ logger = logging.getLogger(__name__)
 class URLProcessor:
     """Handles URL processing, validation, and sitemap parsing."""
     
-    def __init__(self, domain: str, base_path: str, headers: dict, timeout: int):
+    def __init__(self, domain: str, base_paths: List[str], headers: dict, timeout: int):
         self.domain = domain
-        self.base_path = base_path
+        self.base_paths = base_paths
         self.headers = headers
         self.timeout = timeout
 
@@ -21,10 +21,16 @@ class URLProcessor:
         parsed_url = urlparse(url)
         if parsed_url.netloc != self.domain:
             return False
-            
-        if not parsed_url.path.startswith(self.base_path):
-            return False
-
+        
+        is_relevant = False
+        for base_path in self.base_paths:
+          if parsed_url.path.startswith(base_path):
+            is_relevant = True
+            break
+        
+        if not is_relevant:
+          return False
+        
         query_params = parse_qs(parsed_url.query)
         url_language = query_params.get('hl', [None])[0]
 

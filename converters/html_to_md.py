@@ -1,5 +1,4 @@
 from bs4 import BeautifulSoup
-import markdown2
 from markdownify import MarkdownConverter
 import logging
 import re

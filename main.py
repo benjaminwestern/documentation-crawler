@@ -37,7 +37,7 @@ def select_language() -> str:
 def main():
     """Main execution function."""
     selected_urls = []
-    url = ""
+    urls = []
     setup_logging()
     
     try:        
@@ -54,8 +54,14 @@ def main():
             inquirer.Confirm('store_markdown',
                             message="Store markdown content?",
                             default=True),
+            inquirer.Confirm('store_text',
+                            message="Store as plain text content?",
+                            default=False),
             inquirer.Confirm('provide_url_list',
                             message="Provide a list of URLs to export?",
+                            default=False),
+            inquirer.Confirm('multiple_urls',
+                            message="Crawl multiple paths?",
                             default=False)
         ]
         answers = inquirer.prompt(questions)
@@ -64,21 +70,55 @@ def main():
         store_urls = answers['store_urls'] if answers else False
         store_raw_html = answers['store_raw_html'] if answers else False
         store_markdown = answers['store_markdown'] if answers else False
+        store_text = answers['store_text'] if answers else False
         provide_url_list = answers['provide_url_list'] if answers else False
+        multiple_urls = answers['multiple_urls'] if answers else False
 
-        if not store_raw_html and not store_markdown:
+        if not store_raw_html and not store_markdown and not store_text:
             logger.warning("No content will be stored. Exiting...")
             logger.warning("Please enable at least one content storage option.")
             return
         
         config = CrawlerConfig(
-            base_url=url,
+            base_url="",
             debug=debug_mode
         )
-
-        crawler = DocCrawler(config)
-
-        if provide_url_list:
+        
+        if multiple_urls:
+            print("Enter the base URLs to crawl (one per line, 'done' to finish):")
+            while True:
+                url = input().strip()
+                if url.lower() == 'done':
+                    break
+                urls.append(url)
+                
+            if not urls:
+                logger.warning("No URLs provided. Exiting...")
+                return
+            
+            language = select_language()
+            config.language = language
+            try:
+              crawler = DocCrawler(config, urls)
+            except ValueError as e:
+              logger.error(e)
+              return
+                
+            print("Building sitemap...")
+            crawler.parse_sitemap(urls)
+            
+            if not crawler.sitemap:
+                logger.error("No pages found!")
+                return
+            
+            print(f"\nFound {len(crawler.sitemap)} relevant pages.")
+            selected_urls = crawler.select_pages()
+            
+            if not selected_urls:
+                logger.warning("No pages selected.")
+                return
+        
+        elif provide_url_list:
             url_file = input("Enter the path to the URL list: ")
             with open(url_file, 'r') as f:
                 urls = f.readlines()
@@ -91,15 +131,27 @@ def main():
                         logger.warning(f"Invalid URL found: {url}")
                         return
                 selected_urls = urls
+                
+            
+            
+            language = select_language()
+            config.language = language
+            
+            if urls:
+              config.base_url = urls[0]
+            else:
+              config.base_url = ""
+            crawler = DocCrawler(config, urls)
+
         else:
             url = input("Enter the base URL to crawl: ")
             language = select_language()
             config.language = language
             config.base_url = url
-            crawler = DocCrawler(config)
+            crawler = DocCrawler(config, [url])
 
             print("Building sitemap...")
-            crawler.parse_sitemap()
+            crawler.parse_sitemap([url])
             
             if not crawler.sitemap:
                 logger.error("No pages found!")
@@ -115,7 +167,7 @@ def main():
         if store_urls:
             crawler.store_urls(selected_urls)
         
-        crawler.process_selected_pages(selected_urls, store_raw_html, store_markdown)
+        crawler.process_selected_pages(selected_urls, store_raw_html, store_markdown, store_text)
         logger.info("Processing complete!")
 
     except KeyboardInterrupt:

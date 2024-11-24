@@ -160,3 +160,4 @@ cython_debug/
 
 selected_urls/**
 downloaded_urls/**
+crawler_state.json

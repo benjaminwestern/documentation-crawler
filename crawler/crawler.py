@@ -4,12 +4,14 @@ import logging
 import shutil
 from bs4 import BeautifulSoup
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 from urllib.parse import urlparse
 from threading import Lock
 from xml.etree import ElementTree as ET
 import requests
 import time
+import hashlib
+import json
 
 from utils.config import CrawlerConfig
 from utils.display import UnifiedDisplay
@@ -21,24 +23,37 @@ logger = logging.getLogger(__name__)
 class DocCrawler:
     """Main crawler class that orchestrates the documentation crawling process."""
     
-    def __init__(self, config: CrawlerConfig):
+    def __init__(self, config: CrawlerConfig, base_urls: List[str]):
+        
+        # Check if base URLs are from the same domain
+        first_parsed_url = urlparse(base_urls[0])
+        first_domain = first_parsed_url.netloc
+        
+        for url in base_urls:
+            parsed_url = urlparse(url)
+            if parsed_url.netloc != first_domain:
+                raise ValueError(f"Base URLs must be from the same domain: {first_domain} != {parsed_url.netloc}")
+        
         self.config = config
-        parsed_url = urlparse(config.base_url)
-        self.domain = parsed_url.netloc
+        self.base_urls = base_urls
+        self.domain = first_domain
         
         # Initialize display
         self.display = UnifiedDisplay(debug=config.debug)
         
-        # Extract base path for filtering
-        path_parts = parsed_url.path.rstrip('/').split('/')
-        if path_parts[-1] in ['overview', 'introduction', 'docs']:
-            path_parts.pop()
-        self.base_path = '/'.join(path_parts)
+        # Extract base paths for filtering
+        self.base_paths = []
+        for url in base_urls:
+          parsed_url = urlparse(url)
+          path_parts = parsed_url.path.rstrip('/').split('/')
+          if path_parts and path_parts[-1] in ['overview', 'introduction', 'docs']:
+              path_parts.pop()
+          self.base_paths.append('/'.join(path_parts))
         
         # Initialize components
         self.url_processor = URLProcessor(
             domain=self.domain,
-            base_path=self.base_path,
+            base_paths=self.base_paths,
             headers={'User-Agent': config.user_agent},
             timeout=config.timeout
         )
@@ -49,9 +64,11 @@ class DocCrawler:
         self.visited_urls = set()
         self.sitemap = {}
         self.sitemap_lock = Lock()
+        self.state_file = Path("crawler_state.json") # Path for storing crawler state
+        self.page_states = self.load_state() # Load previous states if any.
         
         logger.info(f"Initializing crawler for domain: {self.domain}")
-        logger.info(f"Base path filter: {self.base_path}")
+        logger.info(f"Base paths filter: {self.base_paths}")
         logger.info(f"Language filter: {config.language}")
 
     def make_request(self, url: str, method: str = 'get') -> requests.Response:
@@ -124,7 +141,7 @@ class DocCrawler:
         except Exception as e:
             logger.debug(f"Could not get title for {url}: {e}")
             return url
-
+    
     def process_sitemap_chunk(self, urls: List[str]) -> List[Tuple[str, str]]:
         """Process a chunk of sitemap URLs."""
         results = []
@@ -133,7 +150,7 @@ class DocCrawler:
                 chunk_results = self.process_sitemap_url(url)
                 results.extend(chunk_results)
             except Exception as e:
-                self.stats_display.update(errors=1)
+                self.display.update_stats(errors=1)
                 logger.error(f"Error processing URL chunk: {e}")
         return results
 
@@ -163,13 +180,12 @@ class DocCrawler:
                         self.display.update_stats(errors=1)
                         logger.error(f"Error processing chunk: {e}")
 
-    def parse_sitemap(self, sitemap_url: Optional[str] = None) -> None:
+    def parse_sitemap(self, base_urls: List[str]) -> None:
         """Parse XML sitemap and collect URLs."""
+        sitemap_url = self.url_processor.find_sitemap_url(base_urls[0]) # use first url as the base
         if not sitemap_url:
-            sitemap_url = self.url_processor.find_sitemap_url(self.config.base_url)
-            if not sitemap_url:
-                logger.error("No sitemap found!")
-                return
+            logger.error("No sitemap found!")
+            return
 
         try:
             logger.info(f"Parsing main sitemap: {sitemap_url}")
@@ -254,42 +270,92 @@ class DocCrawler:
         selected_urls = [url for i, url, _ in pages if i in selected_indices]
         logger.info(f"Selected {len(selected_urls)} pages")
         return selected_urls
+    
+    def calculate_hash(self, content: str) -> str:
+        """Calculate the SHA256 hash of content."""
+        return hashlib.sha256(content.encode('utf-8')).hexdigest()
+    
+    def load_state(self) -> dict:
+        """Load previously stored state of crawled pages."""
+        if self.state_file.exists():
+            with self.state_file.open('r') as f:
+                return json.load(f)
+        return {}
 
-    def process_selected_pages(self, selected_urls: List[str], store_raw_html: bool, store_markdown: bool) -> None:
-        """Download, convert, and save selected pages."""
-        output_dir = Path('downloaded_urls')
-        output_dir.mkdir(exist_ok=True)
+    def save_state(self) -> None:
+        """Save current state of crawled pages."""
+        with self.state_file.open('w') as f:
+            json.dump(self.page_states, f, indent=4)
+
+    def process_page(self, url: str, store_raw_html: bool, store_markdown: bool, store_text: bool) -> None:
+        """Download, convert, and save a single page with change detection."""
+        try:
+            response = self.make_request(url)
+            
+            current_hash = self.calculate_hash(response.text)
+            
+            if url in self.page_states and self.page_states[url] == current_hash:
+                logger.info(f"Skipping {url}: No changes detected")
+                self.display.update_stats(processed=1)
+                return
+            
+            urlpath = urlparse(url).path.strip('/')
+
+            # Save markdown content if needed
+            if store_markdown:
+                markdown_content = self.converter.convert(response.text)
+                markdown_filename = Path(urlpath).with_suffix('.md')
+                filepath = Path('downloaded_urls') / markdown_filename
+                filepath.parent.mkdir(parents=True, exist_ok=True)
+                filepath.write_text(markdown_content, encoding='utf-8')
+            
+            # Save raw HTML content if needed
+            if store_raw_html:
+                html_filename = Path(urlpath).with_suffix('.html')
+                html_filepath = Path('downloaded_urls') / html_filename
+                html_filepath.parent.mkdir(parents=True, exist_ok=True)
+                html_filepath.write_text(response.text, encoding='utf-8')
+            
+            # Save as plain text file if needed
+            if store_text:
+                text_filename = Path(urlpath).with_suffix('.txt')
+                text_filepath = Path('downloaded_urls') / text_filename
+                text_filepath.parent.mkdir(parents=True, exist_ok=True)
+                text_filepath.write_text(response.text, encoding='utf-8')
+                
+            
+            self.page_states[url] = current_hash
+            self.display.update_stats(processed=1)
         
-        with self.display.create_progress_bar(len(selected_urls)) as pbar:
-            for i in range(len(selected_urls)):
-                url = selected_urls[i]
-                try:
-                    response = self.make_request(url)
+        except Exception as e:
+            self.display.update_stats(errors=1)
+            logger.error(f"Error processing {url}: {e}")
 
-                    urlpath = urlparse(url).path.strip('/')
+    def parallel_page_processing(self, selected_urls: List[str], store_raw_html: bool, store_markdown: bool, store_text: bool) -> None:
+        """Process selected pages in parallel with unified display and change detection."""
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
+          with self.display.create_progress_bar(len(selected_urls)) as pbar:
+            future_to_url = {
+              executor.submit(self.process_page, url, store_raw_html, store_markdown, store_text): url
+              for url in selected_urls
+            }
+            
+            for future in concurrent.futures.as_completed(future_to_url):
+              try:
+                future.result()
+                pbar.update(1)
+              except Exception as e:
+                self.display.update_stats(errors=1)
+                logger.error(f"Error processing page: {e}")
+        self.save_state()
 
-                    # Save markdown content if needed
-                    if store_markdown:
-                        markdown_content = self.converter.convert(response.text)
-                        markdown_filename = Path(urlpath).with_suffix('.md')
-                        filepath = output_dir / markdown_filename
-                        filepath.parent.mkdir(parents=True, exist_ok=True)
-                        filepath.write_text(markdown_content, encoding='utf-8')
-                    
-                    # Save raw HTML content if needed
-                    if store_raw_html:
-                        html_filename = Path(urlpath).with_suffix('.html')
-                        html_filepath = output_dir / html_filename
-                        html_filepath.parent.mkdir(parents=True, exist_ok=True)
-                        html_filepath.write_text(response.text, encoding='utf-8')
-
-                    # Update display stats and progress bar
-                    self.display.update_stats(processed=1)
-                    pbar.update(1)
-                    
-                except Exception as e:
-                    self.display.update_stats(errors=1)
-                    logger.error(f"Error processing {url}: {e}")
+    def process_selected_pages(self, selected_urls: List[str], store_raw_html: bool, store_markdown: bool, store_text: bool) -> None:
+      """Download, convert, and save selected pages using parallel processing."""
+      # Reset the display stats and progress
+      self.display.stats['processed'] = 0
+      self.display.stats['relevant'] = 0
+      self.display.stats['errors'] = 0
+      self.parallel_page_processing(selected_urls, store_raw_html, store_markdown, store_text)
 
     def store_urls(self, selected_urls: List[str]) -> None:
         """Store captured URLs in a text file."""
