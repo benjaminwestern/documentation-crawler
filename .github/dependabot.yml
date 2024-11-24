@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directories:
+      - "**/*"
+    schedule:
+      # Check for updates to GitHub Actions every day
+      interval: "daily"
+      time: "10:00"
+      timezone: "Australia/Sydney"
