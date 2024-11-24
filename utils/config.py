@@ -14,8 +14,8 @@ class CrawlerConfig:
     user_agent: str = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
     def __post_init__(self):
-        if not self.base_url.startswith("http"):
-            raise ValueError("Invalid URL format. Please include the protocol (http/https).")
+        # if not self.base_url.startswith("http"):
+        #     raise ValueError("Invalid URL format. Please include the protocol (http/https).")
 
         if self.max_workers < 1:
             raise ValueError("max_workers must be at least 1.")
