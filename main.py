@@ -60,8 +60,11 @@ def main():
             inquirer.Confirm('provide_url_list',
                             message="Provide a list of URLs to export?",
                             default=False),
-            inquirer.Confirm('multiple_urls',
+             inquirer.Confirm('multiple_urls',
                             message="Crawl multiple paths?",
+                            default=False),
+            inquirer.Confirm('store_flatten',
+                            message="Remove nested folders from output?",
                             default=False)
         ]
         answers = inquirer.prompt(questions)
@@ -73,6 +76,7 @@ def main():
         store_text = answers['store_text'] if answers else False
         provide_url_list = answers['provide_url_list'] if answers else False
         multiple_urls = answers['multiple_urls'] if answers else False
+        store_flatten = answers['store_flatten'] if answers else False
 
         if not store_raw_html and not store_markdown and not store_text:
             logger.warning("No content will be stored. Exiting...")
@@ -167,7 +171,7 @@ def main():
         if store_urls:
             crawler.store_urls(selected_urls)
         
-        crawler.process_selected_pages(selected_urls, store_raw_html, store_markdown, store_text)
+        crawler.process_selected_pages(selected_urls, store_raw_html, store_markdown, store_text, store_flatten)
         logger.info("Processing complete!")
 
     except KeyboardInterrupt:

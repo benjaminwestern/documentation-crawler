@@ -287,7 +287,32 @@ class DocCrawler:
         with self.state_file.open('w') as f:
             json.dump(self.page_states, f, indent=4)
 
-    def process_page(self, url: str, store_raw_html: bool, store_markdown: bool, store_text: bool) -> None:
+    def _create_filepath(self, urlpath: str, store_flatten: bool, suffix: str) -> Path:
+        """Create filepath based on flatten parameter."""
+        path_parts = Path(urlpath).parts
+        
+        if store_flatten:
+          if len(path_parts) > 1:
+            filename = f"{'_'.join(path_parts[:-1])}_{path_parts[-1]}"
+            
+          else:
+             filename = path_parts[-1]
+        else:
+           filename = Path(urlpath)
+
+        filename = Path(filename).with_suffix(suffix)
+        
+        
+        output_dir = Path('downloaded_urls')
+        filepath = output_dir / filename
+        
+        if len(str(filepath)) > 255:
+          truncated_filename = str(filename)[:200]
+          filepath = output_dir / Path(f"{truncated_filename}_{hashlib.sha256(str(filepath).encode('utf-8')).hexdigest()[:5]}{suffix}")
+          
+        return filepath
+
+    def process_page(self, url: str, store_raw_html: bool, store_markdown: bool, store_text: bool, store_flatten:bool) -> None:
         """Download, convert, and save a single page with change detection."""
         try:
             response = self.make_request(url)
@@ -304,24 +329,21 @@ class DocCrawler:
             # Save markdown content if needed
             if store_markdown:
                 markdown_content = self.converter.convert(response.text)
-                markdown_filename = Path(urlpath).with_suffix('.md')
-                filepath = Path('downloaded_urls') / markdown_filename
+                filepath = self._create_filepath(urlpath, store_flatten, '.md')
                 filepath.parent.mkdir(parents=True, exist_ok=True)
                 filepath.write_text(markdown_content, encoding='utf-8')
             
             # Save raw HTML content if needed
             if store_raw_html:
-                html_filename = Path(urlpath).with_suffix('.html')
-                html_filepath = Path('downloaded_urls') / html_filename
-                html_filepath.parent.mkdir(parents=True, exist_ok=True)
-                html_filepath.write_text(response.text, encoding='utf-8')
+                filepath = self._create_filepath(urlpath, store_flatten, '.html')
+                filepath.parent.mkdir(parents=True, exist_ok=True)
+                filepath.write_text(response.text, encoding='utf-8')
             
             # Save as plain text file if needed
             if store_text:
-                text_filename = Path(urlpath).with_suffix('.txt')
-                text_filepath = Path('downloaded_urls') / text_filename
-                text_filepath.parent.mkdir(parents=True, exist_ok=True)
-                text_filepath.write_text(response.text, encoding='utf-8')
+                filepath = self._create_filepath(urlpath, store_flatten, '.txt')
+                filepath.parent.mkdir(parents=True, exist_ok=True)
+                filepath.write_text(response.text, encoding='utf-8')
                 
             
             self.page_states[url] = current_hash
@@ -331,12 +353,12 @@ class DocCrawler:
             self.display.update_stats(errors=1)
             logger.error(f"Error processing {url}: {e}")
 
-    def parallel_page_processing(self, selected_urls: List[str], store_raw_html: bool, store_markdown: bool, store_text: bool) -> None:
+    def parallel_page_processing(self, selected_urls: List[str], store_raw_html: bool, store_markdown: bool, store_text: bool, store_flatten: bool) -> None:
         """Process selected pages in parallel with unified display and change detection."""
         with concurrent.futures.ThreadPoolExecutor(max_workers=self.config.max_workers) as executor:
           with self.display.create_progress_bar(len(selected_urls)) as pbar:
             future_to_url = {
-              executor.submit(self.process_page, url, store_raw_html, store_markdown, store_text): url
+              executor.submit(self.process_page, url, store_raw_html, store_markdown, store_text, store_flatten): url
               for url in selected_urls
             }
             
@@ -349,13 +371,13 @@ class DocCrawler:
                 logger.error(f"Error processing page: {e}")
         self.save_state()
 
-    def process_selected_pages(self, selected_urls: List[str], store_raw_html: bool, store_markdown: bool, store_text: bool) -> None:
+    def process_selected_pages(self, selected_urls: List[str], store_raw_html: bool, store_markdown: bool, store_text: bool, store_flatten: bool) -> None:
       """Download, convert, and save selected pages using parallel processing."""
       # Reset the display stats and progress
       self.display.stats['processed'] = 0
       self.display.stats['relevant'] = 0
       self.display.stats['errors'] = 0
-      self.parallel_page_processing(selected_urls, store_raw_html, store_markdown, store_text)
+      self.parallel_page_processing(selected_urls, store_raw_html, store_markdown, store_text, store_flatten)
 
     def store_urls(self, selected_urls: List[str]) -> None:
         """Store captured URLs in a text file."""
