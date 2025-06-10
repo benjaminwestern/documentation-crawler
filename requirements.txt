@@ -1,5 +1,5 @@
 beautifulsoup4==4.13.4
-requests==2.32.3
+requests==2.32.4
 markdownify==1.1.0
 inquirer==3.4.0
 tqdm==4.67.1
