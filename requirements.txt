@@ -1,6 +1,6 @@
 beautifulsoup4==4.13.5
 requests==2.32.5
-markdownify==1.2.0
+markdownify==1.2.2
 inquirer==3.4.1
 tqdm==4.67.1
 urllib3==2.5.0
